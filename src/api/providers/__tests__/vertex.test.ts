@@ -5,7 +5,7 @@ import { AnthropicVertex } from "@anthropic-ai/vertex-sdk"
 
 import { VertexHandler } from "../vertex"
 import { ApiStreamChunk } from "../../transform/stream"
-import { VertexAI } from "@google-cloud/vertexai"
+import { GeminiHandler } from "../gemini"
 
 // Mock Vertex SDK
 jest.mock("@anthropic-ai/vertex-sdk", () => ({
@@ -49,58 +49,40 @@ jest.mock("@anthropic-ai/vertex-sdk", () => ({
 	})),
 }))
 
-// Mock Vertex Gemini SDK
-jest.mock("@google-cloud/vertexai", () => {
-	const mockGenerateContentStream = jest.fn().mockImplementation(() => {
-		return {
-			stream: {
-				async *[Symbol.asyncIterator]() {
-					yield {
-						candidates: [
-							{
-								content: {
-									parts: [{ text: "Test Gemini response" }],
-								},
-							},
-						],
-					}
-				},
+jest.mock("../gemini", () => {
+	const mockGeminiHandler = jest.fn()
+
+	mockGeminiHandler.prototype.createMessage = jest.fn().mockImplementation(async function* () {
+		const mockStream: ApiStreamChunk[] = [
+			{
+				type: "usage",
+				inputTokens: 10,
+				outputTokens: 0,
 			},
-			response: {
-				usageMetadata: {
-					promptTokenCount: 5,
-					candidatesTokenCount: 10,
-				},
+			{
+				type: "text",
+				text: "Gemini response part 1",
 			},
+			{
+				type: "text",
+				text: " part 2",
+			},
+			{
+				type: "usage",
+				inputTokens: 0,
+				outputTokens: 5,
+			},
+		]
+
+		for (const chunk of mockStream) {
+			yield chunk
 		}
 	})
 
-	const mockGenerateContent = jest.fn().mockResolvedValue({
-		response: {
-			candidates: [
-				{
-					content: {
-						parts: [{ text: "Test Gemini response" }],
-					},
-				},
-			],
-		},
-	})
-
-	const mockGenerativeModel = jest.fn().mockImplementation(() => {
-		return {
-			generateContentStream: mockGenerateContentStream,
-			generateContent: mockGenerateContent,
-		}
-	})
+	mockGeminiHandler.prototype.completePrompt = jest.fn().mockResolvedValue("Test Gemini response")
 
 	return {
-		VertexAI: jest.fn().mockImplementation(() => {
-			return {
-				getGenerativeModel: mockGenerativeModel,
-			}
-		}),
-		GenerativeModel: mockGenerativeModel,
+		GeminiHandler: mockGeminiHandler,
 	}
 })
 
@@ -128,9 +110,11 @@ describe("VertexHandler", () => {
 				vertexRegion: "us-central1",
 			})
 
-			expect(VertexAI).toHaveBeenCalledWith({
-				project: "test-project",
-				location: "us-central1",
+			expect(GeminiHandler).toHaveBeenCalledWith({
+				isVertex: true,
+				apiModelId: "gemini-1.5-pro-001",
+				vertexProjectId: "test-project",
+				vertexRegion: "us-central1",
 			})
 		})
 
@@ -270,48 +254,48 @@ describe("VertexHandler", () => {
 		})
 
 		it("should handle streaming responses correctly for Gemini", async () => {
-			const mockGemini = require("@google-cloud/vertexai")
-			const mockGenerateContentStream = mockGemini.VertexAI().getGenerativeModel().generateContentStream
 			handler = new VertexHandler({
 				apiModelId: "gemini-1.5-pro-001",
 				vertexProjectId: "test-project",
 				vertexRegion: "us-central1",
 			})
 
-			const stream = handler.createMessage(systemPrompt, mockMessages)
+			const mockCacheKey = "cacheKey"
+			const mockGeminiHandlerInstance = (GeminiHandler as jest.Mock).mock.instances[0]
+
+			const stream = handler.createMessage(systemPrompt, mockMessages, mockCacheKey)
+
 			const chunks: ApiStreamChunk[] = []
 
 			for await (const chunk of stream) {
 				chunks.push(chunk)
 			}
 
-			expect(chunks.length).toBe(2)
+			expect(chunks.length).toBe(4)
 			expect(chunks[0]).toEqual({
-				type: "text",
-				text: "Test Gemini response",
+				type: "usage",
+				inputTokens: 10,
+				outputTokens: 0,
 			})
 			expect(chunks[1]).toEqual({
+				type: "text",
+				text: "Gemini response part 1",
+			})
+			expect(chunks[2]).toEqual({
+				type: "text",
+				text: " part 2",
+			})
+			expect(chunks[3]).toEqual({
 				type: "usage",
-				inputTokens: 5,
-				outputTokens: 10,
+				inputTokens: 0,
+				outputTokens: 5,
 			})
 
-			expect(mockGenerateContentStream).toHaveBeenCalledWith({
-				contents: [
-					{
-						role: "user",
-						parts: [{ text: "Hello" }],
-					},
-					{
-						role: "model",
-						parts: [{ text: "Hi there!" }],
-					},
-				],
-				generationConfig: {
-					maxOutputTokens: 8192,
-					temperature: 0,
-				},
-			})
+			expect(mockGeminiHandlerInstance.createMessage).toHaveBeenCalledWith(
+				systemPrompt,
+				mockMessages,
+				mockCacheKey,
+			)
 		})
 
 		it("should handle multiple content blocks with line breaks for Claude", async () => {
@@ -753,9 +737,6 @@ describe("VertexHandler", () => {
 		})
 
 		it("should complete prompt successfully for Gemini", async () => {
-			const mockGemini = require("@google-cloud/vertexai")
-			const mockGenerateContent = mockGemini.VertexAI().getGenerativeModel().generateContent
-
 			handler = new VertexHandler({
 				apiModelId: "gemini-1.5-pro-001",
 				vertexProjectId: "test-project",
@@ -764,13 +745,9 @@ describe("VertexHandler", () => {
 
 			const result = await handler.completePrompt("Test prompt")
 			expect(result).toBe("Test Gemini response")
-			expect(mockGenerateContent).toHaveBeenCalled()
-			expect(mockGenerateContent).toHaveBeenCalledWith({
-				contents: [{ role: "user", parts: [{ text: "Test prompt" }] }],
-				generationConfig: {
-					temperature: 0,
-				},
-			})
+
+			const mockGeminiHandlerInstance = (GeminiHandler as jest.Mock).mock.instances[0]
+			expect(mockGeminiHandlerInstance.completePrompt).toHaveBeenCalledWith("Test prompt")
 		})
 
 		it("should handle API errors for Claude", async () => {
@@ -790,9 +767,9 @@ describe("VertexHandler", () => {
 		})
 
 		it("should handle API errors for Gemini", async () => {
-			const mockGemini = require("@google-cloud/vertexai")
-			const mockGenerateContent = mockGemini.VertexAI().getGenerativeModel().generateContent
-			mockGenerateContent.mockRejectedValue(new Error("Vertex API error"))
+			const mockGeminiHandlerInstance = (GeminiHandler as jest.Mock).mock.instances[0]
+			mockGeminiHandlerInstance.completePrompt.mockRejectedValue(new Error("Vertex API error"))
+
 			handler = new VertexHandler({
 				apiModelId: "gemini-1.5-pro-001",
 				vertexProjectId: "test-project",
@@ -800,7 +777,7 @@ describe("VertexHandler", () => {
 			})
 
 			await expect(handler.completePrompt("Test prompt")).rejects.toThrow(
-				"Vertex completion error: Vertex API error",
+				"Vertex API error", // Expecting the raw error message from the mock
 			)
 		})
 
@@ -837,19 +814,9 @@ describe("VertexHandler", () => {
 		})
 
 		it("should handle empty response for Gemini", async () => {
-			const mockGemini = require("@google-cloud/vertexai")
-			const mockGenerateContent = mockGemini.VertexAI().getGenerativeModel().generateContent
-			mockGenerateContent.mockResolvedValue({
-				response: {
-					candidates: [
-						{
-							content: {
-								parts: [{ text: "" }],
-							},
-						},
-					],
-				},
-			})
+			const mockGeminiHandlerInstance = (GeminiHandler as jest.Mock).mock.instances[0]
+			mockGeminiHandlerInstance.completePrompt.mockResolvedValue("")
+
 			handler = new VertexHandler({
 				apiModelId: "gemini-1.5-pro-001",
 				vertexProjectId: "test-project",

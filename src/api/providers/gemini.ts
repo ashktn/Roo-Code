@@ -8,8 +8,8 @@ import {
 import NodeCache from "node-cache"
 
 import { SingleCompletionHandler } from "../"
-import type { ApiHandlerOptions, GeminiModelId, ModelInfo } from "../../shared/api"
-import { geminiDefaultModelId, geminiModels } from "../../shared/api"
+import type { ApiHandlerOptions, GeminiModelId, VertexModelId, ModelInfo } from "../../shared/api"
+import { geminiDefaultModelId, geminiModels, vertexDefaultModelId, vertexModels } from "../../shared/api"
 import {
 	convertAnthropicContentToGemini,
 	convertAnthropicMessageToGemini,
@@ -37,8 +37,41 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 	constructor(options: ApiHandlerOptions) {
 		super()
 		this.options = options
-		this.client = new GoogleGenAI({ apiKey: options.geminiApiKey ?? "not-provided" })
+
+		this.client = this.initializeClient()
 		this.contentCaches = new NodeCache({ stdTTL: 5 * 60, checkperiod: 5 * 60 })
+	}
+
+	private initializeClient(): GoogleGenAI {
+		if (this.options.isVertex !== true) {
+			return new GoogleGenAI({ apiKey: this.options.geminiApiKey ?? "not-provided" })
+		}
+
+		if (this.options.vertexJsonCredentials) {
+			return new GoogleGenAI({
+				vertexai: true,
+				project: this.options.vertexProjectId ?? "not-provided",
+				location: this.options.vertexRegion ?? "not-provided",
+				googleAuthOptions: {
+					credentials: JSON.parse(this.options.vertexJsonCredentials),
+				},
+			})
+		} else if (this.options.vertexKeyFile) {
+			return new GoogleGenAI({
+				vertexai: true,
+				project: this.options.vertexProjectId ?? "not-provided",
+				location: this.options.vertexRegion ?? "not-provided",
+				googleAuthOptions: {
+					keyFile: this.options.vertexKeyFile,
+				},
+			})
+		} else {
+			return new GoogleGenAI({
+				vertexai: true,
+				project: this.options.vertexProjectId ?? "not-provided",
+				location: this.options.vertexRegion ?? "not-provided",
+			})
+		}
 	}
 
 	async *createMessage(
@@ -170,6 +203,10 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 	}
 
 	override getModel() {
+		if (this.options.isVertex === true) {
+			return this.getVertexModel()
+		}
+
 		let id = this.options.apiModelId ? (this.options.apiModelId as GeminiModelId) : geminiDefaultModelId
 		let info: ModelInfo = geminiModels[id]
 
@@ -193,6 +230,35 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 		if (!info) {
 			id = geminiDefaultModelId
 			info = geminiModels[geminiDefaultModelId]
+		}
+
+		return { id, info }
+	}
+
+	private getVertexModel() {
+		let id = this.options.apiModelId ? (this.options.apiModelId as VertexModelId) : vertexDefaultModelId
+		let info: ModelInfo = vertexModels[id]
+
+		if (id?.endsWith(":thinking")) {
+			id = id.slice(0, -":thinking".length) as VertexModelId
+
+			if (vertexModels[id]) {
+				info = vertexModels[id]
+
+				return {
+					id,
+					info,
+					thinkingConfig: this.options.modelMaxThinkingTokens
+						? { thinkingBudget: this.options.modelMaxThinkingTokens }
+						: undefined,
+					maxOutputTokens: this.options.modelMaxTokens ?? info.maxTokens ?? undefined,
+				}
+			}
+		}
+
+		if (!info) {
+			id = vertexDefaultModelId
+			info = vertexModels[vertexDefaultModelId]
 		}
 
 		return { id, info }

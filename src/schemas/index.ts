@@ -375,6 +375,7 @@ export const providerSettingsSchema = z.object({
 	// Gemini
 	geminiApiKey: z.string().optional(),
 	googleGeminiBaseUrl: z.string().optional(),
+	isVertex: z.boolean().optional(),
 	// OpenAI Native
 	openAiNativeApiKey: z.string().optional(),
 	// Mistral
@@ -465,6 +466,7 @@ const providerSettingsRecord: ProviderSettingsRecord = {
 	// Gemini
 	geminiApiKey: undefined,
 	googleGeminiBaseUrl: undefined,
+	isVertex: undefined,
 	// OpenAI Native
 	openAiNativeApiKey: undefined,
 	// Mistral
@@ -651,7 +653,7 @@ const globalSettingsRecord: GlobalSettingsRecord = {
 	customSupportPrompts: undefined,
 	enhancementApiConfigId: undefined,
 	cachedChromeHostUrl: undefined,
-	historyPreviewCollapsed: undefined, 
+	historyPreviewCollapsed: undefined,
 }
 
 export const GLOBAL_SETTINGS_KEYS = Object.keys(globalSettingsRecord) as Keys<GlobalSettings>[]

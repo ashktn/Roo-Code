@@ -2,16 +2,14 @@ import { Anthropic } from "@anthropic-ai/sdk"
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk"
 import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
 
-import { VertexAI } from "@google-cloud/vertexai"
-
 import { ApiHandlerOptions, ModelInfo, vertexDefaultModelId, VertexModelId, vertexModels } from "../../shared/api"
 import { ApiStream } from "../transform/stream"
-import { convertAnthropicMessageToVertexGemini } from "../transform/vertex-gemini-format"
 import { BaseProvider } from "./base-provider"
 
 import { ANTHROPIC_DEFAULT_MAX_TOKENS } from "./constants"
 import { getModelParams, SingleCompletionHandler } from "../"
 import { GoogleAuth } from "google-auth-library"
+import { GeminiHandler } from "./gemini"
 
 // Types for Vertex SDK
 
@@ -97,7 +95,7 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 
 	protected options: ApiHandlerOptions
 	private anthropicClient: AnthropicVertex
-	private geminiClient: VertexAI
+	private geminiProvider: GeminiHandler
 	private modelType: string
 
 	constructor(options: ApiHandlerOptions) {
@@ -111,9 +109,13 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 		} else {
 			throw new Error(`Unknown model ID: ${this.options.apiModelId}`)
 		}
+		this.anthropicClient = this.initializeAnthropicClient()
+		this.geminiProvider = this.initializeGeminiClient()
+	}
 
+	private initializeAnthropicClient(): AnthropicVertex {
 		if (this.options.vertexJsonCredentials) {
-			this.anthropicClient = new AnthropicVertex({
+			return new AnthropicVertex({
 				projectId: this.options.vertexProjectId ?? "not-provided",
 				// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
 				region: this.options.vertexRegion ?? "us-east5",
@@ -123,7 +125,7 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 				}),
 			})
 		} else if (this.options.vertexKeyFile) {
-			this.anthropicClient = new AnthropicVertex({
+			return new AnthropicVertex({
 				projectId: this.options.vertexProjectId ?? "not-provided",
 				// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
 				region: this.options.vertexRegion ?? "us-east5",
@@ -133,35 +135,17 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 				}),
 			})
 		} else {
-			this.anthropicClient = new AnthropicVertex({
+			return new AnthropicVertex({
 				projectId: this.options.vertexProjectId ?? "not-provided",
 				// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
 				region: this.options.vertexRegion ?? "us-east5",
 			})
 		}
+	}
 
-		if (this.options.vertexJsonCredentials) {
-			this.geminiClient = new VertexAI({
-				project: this.options.vertexProjectId ?? "not-provided",
-				location: this.options.vertexRegion ?? "us-east5",
-				googleAuthOptions: {
-					credentials: JSON.parse(this.options.vertexJsonCredentials),
-				},
-			})
-		} else if (this.options.vertexKeyFile) {
-			this.geminiClient = new VertexAI({
-				project: this.options.vertexProjectId ?? "not-provided",
-				location: this.options.vertexRegion ?? "us-east5",
-				googleAuthOptions: {
-					keyFile: this.options.vertexKeyFile,
-				},
-			})
-		} else {
-			this.geminiClient = new VertexAI({
-				project: this.options.vertexProjectId ?? "not-provided",
-				location: this.options.vertexRegion ?? "us-east5",
-			})
-		}
+	private initializeGeminiClient(): GeminiHandler {
+		this.options.isVertex = true
+		return new GeminiHandler(this.options)
 	}
 
 	private formatMessageForCache(message: Anthropic.Messages.MessageParam, shouldCache: boolean): VertexMessage {
@@ -209,42 +193,6 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 					...(shouldCache && isLastTextBlock && { cache_control: { type: "ephemeral" } }),
 				}
 			}),
-		}
-	}
-
-	private async *createGeminiMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
-		const model = this.geminiClient.getGenerativeModel({
-			model: this.getModel().id,
-			systemInstruction: systemPrompt,
-		})
-
-		const result = await model.generateContentStream({
-			contents: messages.map(convertAnthropicMessageToVertexGemini),
-			generationConfig: {
-				maxOutputTokens: this.getModel().info.maxTokens ?? undefined,
-				temperature: this.options.modelTemperature ?? 0,
-			},
-		})
-
-		for await (const chunk of result.stream) {
-			if (chunk.candidates?.[0]?.content?.parts) {
-				for (const part of chunk.candidates[0].content.parts) {
-					if (part.text) {
-						yield {
-							type: "text",
-							text: part.text,
-						}
-					}
-				}
-			}
-		}
-
-		const response = await result.response
-
-		yield {
-			type: "usage",
-			inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
-			outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
 		}
 	}
 
@@ -366,14 +314,18 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 		}
 	}
 
-	override async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
+	override async *createMessage(
+		systemPrompt: string,
+		messages: Anthropic.Messages.MessageParam[],
+		cacheKey?: string,
+	): ApiStream {
 		switch (this.modelType) {
 			case this.MODEL_CLAUDE: {
 				yield* this.createClaudeMessage(systemPrompt, messages)
 				break
 			}
 			case this.MODEL_GEMINI: {
-				yield* this.createGeminiMessage(systemPrompt, messages)
+				yield* this.geminiProvider.createMessage(systemPrompt, messages, cacheKey)
 				break
 			}
 			default: {
@@ -401,32 +353,7 @@ export class VertexHandler extends BaseProvider implements SingleCompletionHandl
 	}
 
 	private async completePromptGemini(prompt: string) {
-		try {
-			const model = this.geminiClient.getGenerativeModel({
-				model: this.getModel().id,
-			})
-
-			const result = await model.generateContent({
-				contents: [{ role: "user", parts: [{ text: prompt }] }],
-				generationConfig: {
-					temperature: this.options.modelTemperature ?? 0,
-				},
-			})
-
-			let text = ""
-			result.response.candidates?.forEach((candidate) => {
-				candidate.content.parts.forEach((part) => {
-					text += part.text
-				})
-			})
-
-			return text
-		} catch (error) {
-			if (error instanceof Error) {
-				throw new Error(`Vertex completion error: ${error.message}`)
-			}
-			throw error
-		}
+		return this.geminiProvider.completePrompt(prompt)
 	}
 
 	private async completePromptClaude(prompt: string) {

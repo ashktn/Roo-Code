@@ -617,7 +617,6 @@ describe("VertexHandler", () => {
 				model: "claude-3-5-sonnet-v2@20241022",
 				max_tokens: 8192,
 				temperature: 0,
-				system: "",
 				messages: [
 					{
 						role: "user",

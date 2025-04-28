@@ -5,9 +5,11 @@ import {
 	type GenerateContentParameters,
 	type Content,
 } from "@google/genai"
+import type { JWTInput } from "google-auth-library"
 import NodeCache from "node-cache"
 
 import { ApiHandlerOptions, ModelInfo, GeminiModelId, geminiDefaultModelId, geminiModels } from "../../shared/api"
+import { safeJsonParse } from "../../shared/safeJsonParse"
 
 import { SingleCompletionHandler } from "../index"
 import {
@@ -52,7 +54,9 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 					vertexai: true,
 					project,
 					location,
-					googleAuthOptions: { credentials: JSON.parse(this.options.vertexJsonCredentials) },
+					googleAuthOptions: {
+						credentials: safeJsonParse<JWTInput>(this.options.vertexJsonCredentials, undefined),
+					},
 				})
 			: this.options.vertexKeyFile
 				? new GoogleGenAI({

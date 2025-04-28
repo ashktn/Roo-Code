@@ -45,11 +45,14 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 
 		this.options = options
 
+		// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
+		const projectId = this.options.vertexProjectId ?? "not-provided"
+		const region = this.options.vertexRegion ?? "us-east5"
+
 		if (this.options.vertexJsonCredentials) {
 			this.client = new AnthropicVertex({
-				projectId: this.options.vertexProjectId ?? "not-provided",
-				// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
-				region: this.options.vertexRegion ?? "us-east5",
+				projectId,
+				region,
 				googleAuth: new GoogleAuth({
 					scopes: ["https://www.googleapis.com/auth/cloud-platform"],
 					credentials: JSON.parse(this.options.vertexJsonCredentials),
@@ -57,20 +60,15 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 			})
 		} else if (this.options.vertexKeyFile) {
 			this.client = new AnthropicVertex({
-				projectId: this.options.vertexProjectId ?? "not-provided",
-				// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
-				region: this.options.vertexRegion ?? "us-east5",
+				projectId,
+				region,
 				googleAuth: new GoogleAuth({
 					scopes: ["https://www.googleapis.com/auth/cloud-platform"],
 					keyFile: this.options.vertexKeyFile,
 				}),
 			})
 		} else {
-			this.client = new AnthropicVertex({
-				projectId: this.options.vertexProjectId ?? "not-provided",
-				// https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#regions
-				region: this.options.vertexRegion ?? "us-east5",
-			})
+			this.client = new AnthropicVertex({ projectId, region })
 		}
 	}
 

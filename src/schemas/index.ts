@@ -355,6 +355,7 @@ export const providerSettingsSchema = z.object({
 	openAiUseAzure: z.boolean().optional(),
 	azureApiVersion: z.string().optional(),
 	openAiStreamingEnabled: z.boolean().optional(),
+	enableReasoningEffort: z.boolean().optional(),
 	// Ollama
 	ollamaModelId: z.string().optional(),
 	ollamaBaseUrl: z.string().optional(),
@@ -453,6 +454,7 @@ const providerSettingsRecord: ProviderSettingsRecord = {
 	openAiUseAzure: undefined,
 	azureApiVersion: undefined,
 	openAiStreamingEnabled: undefined,
+	enableReasoningEffort: undefined,
 	// Ollama
 	ollamaModelId: undefined,
 	ollamaBaseUrl: undefined,
@@ -741,7 +743,6 @@ export const clineAsks = [
 	"mistake_limit_reached",
 	"browser_action_launch",
 	"use_mcp_server",
-	"finishTask",
 ] as const
 
 export const clineAskSchema = z.enum(clineAsks)
@@ -751,7 +752,6 @@ export type ClineAsk = z.infer<typeof clineAskSchema>
 // ClineSay
 
 export const clineSays = [
-	"task",
 	"error",
 	"api_req_started",
 	"api_req_finished",
@@ -764,15 +764,11 @@ export const clineSays = [
 	"user_feedback",
 	"user_feedback_diff",
 	"command_output",
-	"tool",
 	"shell_integration_warning",
 	"browser_action",
 	"browser_action_result",
-	"command",
 	"mcp_server_request_started",
 	"mcp_server_response",
-	"new_task_started",
-	"new_task",
 	"subtask_result",
 	"checkpoint_saved",
 	"rooignore_error",

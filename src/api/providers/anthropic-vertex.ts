@@ -1,39 +1,15 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import { AnthropicVertex } from "@anthropic-ai/vertex-sdk"
-import { Stream as AnthropicStream } from "@anthropic-ai/sdk/streaming"
-import { GoogleAuth } from "google-auth-library"
+import { GoogleAuth, JWTInput } from "google-auth-library"
 
 import { ApiHandlerOptions, ModelInfo, vertexDefaultModelId, VertexModelId, vertexModels } from "../../shared/api"
 import { ApiStream } from "../transform/stream"
+import { safeJsonParse } from "../../shared/safeJsonParse"
 
 import { getModelParams, SingleCompletionHandler } from "../index"
 import { BaseProvider } from "./base-provider"
 import { ANTHROPIC_DEFAULT_MAX_TOKENS } from "./constants"
 import { formatMessageForCache } from "../transform/vertex-caching"
-
-interface VertexUsage {
-	input_tokens?: number
-	output_tokens?: number
-	cache_creation_input_tokens?: number
-	cache_read_input_tokens?: number
-}
-
-interface VertexMessageResponse {
-	content: Array<{ type: "text"; text: string }>
-}
-
-interface VertexMessageStreamEvent {
-	type: "message_start" | "message_delta" | "content_block_start" | "content_block_delta"
-	message?: {
-		usage: VertexUsage
-	}
-	usage?: {
-		output_tokens: number
-	}
-	content_block?: { type: "text"; text: string } | { type: "thinking"; thinking: string }
-	index?: number
-	delta?: { type: "text_delta"; text: string } | { type: "thinking_delta"; thinking: string }
-}
 
 // https://docs.anthropic.com/en/api/claude-on-vertex-ai
 export class AnthropicVertexHandler extends BaseProvider implements SingleCompletionHandler {
@@ -55,7 +31,7 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 				region,
 				googleAuth: new GoogleAuth({
 					scopes: ["https://www.googleapis.com/auth/cloud-platform"],
-					credentials: JSON.parse(this.options.vertexJsonCredentials),
+					credentials: safeJsonParse<JWTInput>(this.options.vertexJsonCredentials, undefined),
 				}),
 			})
 		} else if (this.options.vertexKeyFile) {
@@ -73,14 +49,18 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 	}
 
 	override async *createMessage(systemPrompt: string, messages: Anthropic.Messages.MessageParam[]): ApiStream {
-		const model = this.getModel()
-		let { id, temperature, maxTokens, thinking } = model
-		const useCache = model.info.supportsPromptCache
+		let {
+			id,
+			info: { supportsPromptCache },
+			temperature,
+			maxTokens,
+			thinking,
+		} = this.getModel()
 
 		// Find indices of user messages that we want to cache
 		// We only cache the last two user messages to stay within the 4-block limit
 		// (1 block for system + 1 block each for last two user messages = 3 total)
-		const userMsgIndices = useCache
+		const userMsgIndices = supportsPromptCache
 			? messages.reduce((acc, msg, i) => (msg.role === "user" ? [...acc, i] : acc), [] as number[])
 			: []
 
@@ -100,26 +80,25 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 		 * This ensures we stay under the 4-block limit while maintaining effective caching
 		 * for the most relevant context.
 		 */
-		const params = {
+		const params: Anthropic.Messages.MessageCreateParamsStreaming = {
 			model: id,
-			max_tokens: maxTokens,
+			max_tokens: maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
 			temperature,
 			thinking,
 			// Cache the system prompt if caching is enabled.
-			system: useCache
+			system: supportsPromptCache
 				? [{ text: systemPrompt, type: "text" as const, cache_control: { type: "ephemeral" } }]
 				: systemPrompt,
 			messages: messages.map((message, index) => {
 				// Only cache the last two user messages.
-				const shouldCache = useCache && (index === lastUserMsgIndex || index === secondLastMsgUserIndex)
+				const shouldCache =
+					supportsPromptCache && (index === lastUserMsgIndex || index === secondLastMsgUserIndex)
 				return formatMessageForCache(message, shouldCache)
 			}),
 			stream: true,
 		}
 
-		const stream = (await this.client.messages.create(
-			params as Anthropic.Messages.MessageCreateParamsStreaming,
-		)) as unknown as AnthropicStream<VertexMessageStreamEvent>
+		const stream = await this.client.messages.create(params)
 
 		for await (const chunk of stream) {
 			switch (chunk.type) {
@@ -130,8 +109,8 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 						type: "usage",
 						inputTokens: usage.input_tokens || 0,
 						outputTokens: usage.output_tokens || 0,
-						cacheWriteTokens: usage.cache_creation_input_tokens,
-						cacheReadTokens: usage.cache_read_input_tokens,
+						cacheWriteTokens: usage.cache_creation_input_tokens || undefined,
+						cacheReadTokens: usage.cache_read_input_tokens || undefined,
 					}
 
 					break
@@ -164,6 +143,7 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 							break
 						}
 					}
+
 					break
 				}
 				case "content_block_delta": {
@@ -177,6 +157,7 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 							break
 						}
 					}
+
 					break
 				}
 			}
@@ -203,19 +184,23 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 
 	async completePrompt(prompt: string) {
 		try {
-			let { id, info, temperature, maxTokens, thinking } = this.getModel()
-			const useCache = info.supportsPromptCache
+			let {
+				id,
+				info: { supportsPromptCache },
+				temperature,
+				maxTokens = ANTHROPIC_DEFAULT_MAX_TOKENS,
+				thinking,
+			} = this.getModel()
 
 			const params: Anthropic.Messages.MessageCreateParamsNonStreaming = {
 				model: id,
-				max_tokens: maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS,
+				max_tokens: maxTokens,
 				temperature,
 				thinking,
-				system: "", // No system prompt needed for single completions.
 				messages: [
 					{
 						role: "user",
-						content: useCache
+						content: supportsPromptCache
 							? [{ type: "text" as const, text: prompt, cache_control: { type: "ephemeral" } }]
 							: prompt,
 					},
@@ -223,7 +208,7 @@ export class AnthropicVertexHandler extends BaseProvider implements SingleComple
 				stream: false,
 			}
 
-			const response = (await this.client.messages.create(params)) as unknown as VertexMessageResponse
+			const response = await this.client.messages.create(params)
 			const content = response.content[0]
 
 			if (content.type === "text") {

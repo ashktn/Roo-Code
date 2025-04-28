@@ -104,7 +104,6 @@ type ProviderSettings = {
 	lmStudioSpeculativeDecodingEnabled?: boolean | undefined
 	geminiApiKey?: string | undefined
 	googleGeminiBaseUrl?: string | undefined
-	isVertex?: boolean | undefined
 	openAiNativeApiKey?: string | undefined
 	mistralApiKey?: string | undefined
 	mistralCodestralUrl?: string | undefined

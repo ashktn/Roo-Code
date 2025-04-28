@@ -7,9 +7,9 @@ import {
 } from "@google/genai"
 import NodeCache from "node-cache"
 
-import { SingleCompletionHandler } from "../"
-import type { ApiHandlerOptions, GeminiModelId, VertexModelId, ModelInfo } from "../../shared/api"
-import { geminiDefaultModelId, geminiModels, vertexDefaultModelId, vertexModels } from "../../shared/api"
+import { ApiHandlerOptions, ModelInfo, GeminiModelId, geminiDefaultModelId, geminiModels } from "../../shared/api"
+
+import { SingleCompletionHandler } from "../index"
 import {
 	convertAnthropicContentToGemini,
 	convertAnthropicMessageToGemini,
@@ -27,6 +27,10 @@ type CacheEntry = {
 	count: number
 }
 
+type GeminiHandlerOptions = ApiHandlerOptions & {
+	isVertex?: boolean
+}
+
 export class GeminiHandler extends BaseProvider implements SingleCompletionHandler {
 	protected options: ApiHandlerOptions
 
@@ -34,44 +38,34 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 	private contentCaches: NodeCache
 	private isCacheBusy = false
 
-	constructor(options: ApiHandlerOptions) {
+	constructor({ isVertex, ...options }: GeminiHandlerOptions) {
 		super()
+
 		this.options = options
 
-		this.client = this.initializeClient()
+		const project = this.options.vertexProjectId ?? "not-provided"
+		const location = this.options.vertexRegion ?? "not-provided"
+		const apiKey = this.options.geminiApiKey ?? "not-provided"
+
+		this.client = this.options.vertexJsonCredentials
+			? new GoogleGenAI({
+					vertexai: true,
+					project,
+					location,
+					googleAuthOptions: { credentials: JSON.parse(this.options.vertexJsonCredentials) },
+				})
+			: this.options.vertexKeyFile
+				? new GoogleGenAI({
+						vertexai: true,
+						project,
+						location,
+						googleAuthOptions: { keyFile: this.options.vertexKeyFile },
+					})
+				: isVertex
+					? new GoogleGenAI({ vertexai: true, project, location })
+					: new GoogleGenAI({ apiKey })
+
 		this.contentCaches = new NodeCache({ stdTTL: 5 * 60, checkperiod: 5 * 60 })
-	}
-
-	private initializeClient(): GoogleGenAI {
-		if (this.options.isVertex !== true) {
-			return new GoogleGenAI({ apiKey: this.options.geminiApiKey ?? "not-provided" })
-		}
-
-		if (this.options.vertexJsonCredentials) {
-			return new GoogleGenAI({
-				vertexai: true,
-				project: this.options.vertexProjectId ?? "not-provided",
-				location: this.options.vertexRegion ?? "not-provided",
-				googleAuthOptions: {
-					credentials: JSON.parse(this.options.vertexJsonCredentials),
-				},
-			})
-		} else if (this.options.vertexKeyFile) {
-			return new GoogleGenAI({
-				vertexai: true,
-				project: this.options.vertexProjectId ?? "not-provided",
-				location: this.options.vertexRegion ?? "not-provided",
-				googleAuthOptions: {
-					keyFile: this.options.vertexKeyFile,
-				},
-			})
-		} else {
-			return new GoogleGenAI({
-				vertexai: true,
-				project: this.options.vertexProjectId ?? "not-provided",
-				location: this.options.vertexRegion ?? "not-provided",
-			})
-		}
 	}
 
 	async *createMessage(
@@ -203,18 +197,14 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 	}
 
 	override getModel() {
-		if (this.options.isVertex === true) {
-			return this.getVertexModel()
-		}
-
-		let id = this.options.apiModelId ? (this.options.apiModelId as GeminiModelId) : geminiDefaultModelId
-		let info: ModelInfo = geminiModels[id]
+		let id = this.options.apiModelId ?? geminiDefaultModelId
+		let info: ModelInfo = geminiModels[id as GeminiModelId]
 
 		if (id?.endsWith(":thinking")) {
-			id = id.slice(0, -":thinking".length) as GeminiModelId
+			id = id.slice(0, -":thinking".length)
 
-			if (geminiModels[id]) {
-				info = geminiModels[id]
+			if (geminiModels[id as GeminiModelId]) {
+				info = geminiModels[id as GeminiModelId]
 
 				return {
 					id,
@@ -230,35 +220,6 @@ export class GeminiHandler extends BaseProvider implements SingleCompletionHandl
 		if (!info) {
 			id = geminiDefaultModelId
 			info = geminiModels[geminiDefaultModelId]
-		}
-
-		return { id, info }
-	}
-
-	private getVertexModel() {
-		let id = this.options.apiModelId ? (this.options.apiModelId as VertexModelId) : vertexDefaultModelId
-		let info: ModelInfo = vertexModels[id]
-
-		if (id?.endsWith(":thinking")) {
-			id = id.slice(0, -":thinking".length) as VertexModelId
-
-			if (vertexModels[id]) {
-				info = vertexModels[id]
-
-				return {
-					id,
-					info,
-					thinkingConfig: this.options.modelMaxThinkingTokens
-						? { thinkingBudget: this.options.modelMaxThinkingTokens }
-						: undefined,
-					maxOutputTokens: this.options.modelMaxTokens ?? info.maxTokens ?? undefined,
-				}
-			}
-		}
-
-		if (!info) {
-			id = vertexDefaultModelId
-			info = vertexModels[vertexDefaultModelId]
 		}
 
 		return { id, info }

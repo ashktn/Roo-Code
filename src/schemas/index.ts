@@ -375,7 +375,6 @@ export const providerSettingsSchema = z.object({
 	// Gemini
 	geminiApiKey: z.string().optional(),
 	googleGeminiBaseUrl: z.string().optional(),
-	isVertex: z.boolean().optional(),
 	// OpenAI Native
 	openAiNativeApiKey: z.string().optional(),
 	// Mistral
@@ -466,7 +465,6 @@ const providerSettingsRecord: ProviderSettingsRecord = {
 	// Gemini
 	geminiApiKey: undefined,
 	googleGeminiBaseUrl: undefined,
-	isVertex: undefined,
 	// OpenAI Native
 	openAiNativeApiKey: undefined,
 	// Mistral
